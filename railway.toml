@@ -1,0 +1,4 @@
+# Root railway.toml — kept for reference only.
+# Railway is configured with TWO services, each with its own Root Directory:
+#   Backend  → root dir: backend/   (uses backend/railway.toml)
+#   Dashboard → root dir: dashboard/ (uses dashboard/railway.toml)

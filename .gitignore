@@ -1,0 +1,31 @@
+# Secrets — NEVER commit these
+.env
+*.env
+firebase-service-account.json
+firebase-service-account-key.json
+*-service-account*.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Node
+node_modules/
+.next/
+out/
+dashboard/.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
