@@ -87,7 +87,7 @@ class NutritionAgent(BaseAgent):
             raw = await self.call_claude(system=system, messages=messages)
 
         try:
-            data = json.loads(raw.strip())
+            data = json.loads(self._strip_codeblock(raw))
             return await self._build_response(user, data, text_description)
         except (json.JSONDecodeError, KeyError):
             logger.warning("NutritionAgent returned non-JSON: %.200s", raw)
@@ -121,6 +121,16 @@ class NutritionAgent(BaseAgent):
             logger.error("Failed to save meal for user %s: %s", user.telegram_id, exc, exc_info=True)
 
         return response
+
+    @staticmethod
+    def _strip_codeblock(text: str) -> str:
+        t = text.strip()
+        if t.startswith("```"):
+            first_nl = t.index("\n") if "\n" in t else 3
+            t = t[first_nl + 1:]
+        if t.endswith("```"):
+            t = t[:-3]
+        return t.strip()
 
     @staticmethod
     def _format_profile(user: UserModel) -> str:

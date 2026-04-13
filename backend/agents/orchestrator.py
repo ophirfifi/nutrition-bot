@@ -1,23 +1,23 @@
 """
 OrchestratorAgent — single gateway for all user messages.
 1. Distress guard (keyword scan, sync, before any LLM call)
-2. Routes: photo → nutrition, text → LLM decides sub-agent
+2. Routes: photo → nutrition, text → smart conversational response
 3. Logs all interactions to Firestore
 """
 import json
 import logging
+from datetime import datetime
 
 from agents.base_agent import BaseAgent
-from agents.habits import HabitsAgent
-from agents.motivation import MotivationAgent
 from agents.nutrition import NutritionAgent
 from database.models import InteractionModel, UserModel
 from database.repositories import interactions as interaction_repo
+from database.repositories import meals as meal_repo
+from database.repositories import scores as score_repo
 
 logger = logging.getLogger(__name__)
 
 # ── Distress detection ─────────────────────────────────────────────────────────
-# Hebrew patterns indicating potential distress / disordered eating
 DISTRESS_PATTERNS = [
     "שונא את הגוף שלי",
     "שונאת את הגוף שלי",
@@ -26,7 +26,6 @@ DISTRESS_PATTERNS = [
     "לא אוכל כלום",
     "לא אוכלת כלום",
     "לא רוצה לאכול",
-    "לא רוצה לאכולת",
     "לא ראוי לאכול",
     "לא ראויה לאכול",
     "מרגיש רע עם עצמי",
@@ -44,28 +43,52 @@ SAFETY_MESSAGE = """מרגיש שקשה לך עכשיו 💙
 
 אני כאן אם תרצה לדבר 🤗"""
 
-SYSTEM_PROMPT = """אתה האורקסטרטור של "נוטרי" — אפליקציית תזונה חכמה לנוער.
+SYSTEM_PROMPT = """אתה "נוטרי" — בוט תזונה חכם ואישי לנוער.
+אתה חבר אמיתי שעוזר עם תזונה, הרגלים, ומוטיבציה — לא רובוט קליני.
 
-תפקידך: לקרוא את הודעת המשתמש ולהחליט מה לעשות איתה.
-
-פרופיל המשתמש:
+## פרופיל המשתמש
 {user_profile}
 
-החזר **אך ורק** JSON תקין:
+## הנתונים של היום
+{today_stats}
+
+## כללים קשיחים
+- דבר בעברית קלילה, כמו חבר, עם אמוג'ים
+- לעולם לא לומר קלוריות, משקל, BMI, דיאטה, הגבלה
+- חיובי ולא שיפוטי — תמיד
+- תשובות קצרות: 2-4 משפטים מקסימום
+- אם המשתמש ביצע הישג — חגוג איתו!
+- אם המשתמש דילג על ארוחה — "סבבה, מחר יום חדש"
+- אם המשתמש רעב — שאל מה אכל היום, תייעץ מה לאכול עכשיו, התייחס לשעה ולאימונים
+
+## מה אתה יודע לעשות
+1. **תזונה** — המלצות על מה לאכול, תגובה למה שאכלו, הסברים על ארוחות
+   - אם מישהו אומר "אני רעב" — תשאל מה אכל היום, תמליץ מה כדאי לאכול עכשיו
+   - אם מישהו מתאר ארוחה בטקסט — דרג (ירוק/צהוב/אדום) ותן פידבק
+   - התאם לספורט: ספורטאי = צריך יותר פחמימות וחלבון
+2. **מוטיבציה** — עידוד, חיזוקים, תמיכה רגשית
+   - אם מישהו אומר "אכלתי שטויות" — אל תשפוט, תחזק
+   - אם מישהו שואל "עשיתי טוב?" — ענה בכנות וחיובית
+3. **הרגלים** — מים, streak, ניקוד, התקדמות
+   - דווח על הנתונים של היום בצורה מעודדת
+   - אם מדווח על שתייה (כמה כוסות מים) — רשום את המספר
+4. **שיחה כללית** — ברכות, בדיחות, שאלות
+
+## פורמט תגובה
+החזר **אך ורק** JSON:
 {{
-  "action": "direct" | "nutrition" | "motivation" | "habits",
-  "response": "תגובה ישירה (חובה אם action=direct, אחרת null)"
+  "response": "התגובה שלך למשתמש (עברית, 2-4 משפטים, אמוג'ים)",
+  "water_glasses": null,
+  "meal_report": null
 }}
 
-בחירת action:
-- direct   → שיחת חולין, ברכות, שאלות כלליות שלא קשורות לאוכל/מוטיבציה/הרגלים
-- nutrition → דיבור על אוכל ספציפי, מה אכלו, מתכון, מה לאכול
-- motivation → רגש, קושי, הצלחה, "עשיתי טוב?", עידוד
-- habits    → מים, שתייה, streak, ניקוד, כמה ארוחות היום
-
-כללים:
-- תגובת direct: עברית קלילה, 1-3 משפטים, עם אמוג'ים
-- אין קלוריות, משקל, BMI — לעולם
+- water_glasses: מספר (אם המשתמש דיווח כמה כוסות שתה, אחרת null)
+- meal_report: אובייקט עם rating/categories/description (אם המשתמש תיאר ארוחה, אחרת null)
+  {{
+    "rating": "green" | "yellow" | "red",
+    "description": "תיאור קצר של הארוחה",
+    "categories": {{"protein": true/false, "carbs": true/false, "fat": true/false, "vegetables": true/false}}
+  }}
 """
 
 
@@ -74,8 +97,6 @@ class OrchestratorAgent(BaseAgent):
     def __init__(self) -> None:
         super().__init__()
         self.nutrition = NutritionAgent()
-        self.motivation = MotivationAgent()
-        self.habits = HabitsAgent()
 
     async def process(
         self,
@@ -101,7 +122,7 @@ class OrchestratorAgent(BaseAgent):
             )
             return SAFETY_MESSAGE
 
-        # ── Photo → always nutrition ───────────────────────────────
+        # ── Photo → always nutrition agent (vision) ───────────────
         if photo_base64:
             response = await self.nutrition.analyze_meal(
                 user=user,
@@ -112,39 +133,43 @@ class OrchestratorAgent(BaseAgent):
             await self._log(user.telegram_id, "outbound", response, "nutrition")
             return response
 
-        # ── Route text message via LLM ─────────────────────────────
-        system = SYSTEM_PROMPT.format(user_profile=self._profile(user))
+        # ── Text → smart conversational agent ─────────────────────
+        recent = await interaction_repo.get_recent(user.telegram_id, limit=16)
+        today_stats = await self._get_today_stats(user.telegram_id)
+
+        system = SYSTEM_PROMPT.format(
+            user_profile=self._profile(user),
+            today_stats=today_stats,
+        )
+
+        # Build conversation history from recent interactions
+        messages = self._build_history(recent) + [
+            {"role": "user", "content": message_text}
+        ]
+
         raw = await self.call_claude(
             system=system,
-            messages=[{"role": "user", "content": message_text}],
-            max_tokens=512,
+            messages=messages,
+            max_tokens=1024,
         )
 
         try:
             data = json.loads(self._strip_codeblock(raw))
-            action = data.get("action", "direct")
+            response = data.get("response") or "סבבה! 👍"
+
+            # Handle water report
+            water = data.get("water_glasses")
+            if water is not None and isinstance(water, (int, float)) and water > 0:
+                await self._update_water(user.telegram_id, int(water))
+
+            # Handle meal report from text
+            meal = data.get("meal_report")
+            if meal and isinstance(meal, dict) and meal.get("rating"):
+                await self._save_text_meal(user, meal)
+
         except (json.JSONDecodeError, KeyError):
             logger.warning("Orchestrator returned non-JSON: %.200s", raw)
-            await self._log(user.telegram_id, "outbound", raw, "orchestrator")
-            return raw
-
-        if action == "direct":
-            response = data.get("response") or "סבבה! 👍"
-        elif action == "nutrition":
-            response = await self.nutrition.analyze_meal(
-                user=user, text_description=message_text
-            )
-        elif action == "motivation":
-            recent = await interaction_repo.get_recent(user.telegram_id, limit=10)
-            response = await self.motivation.process(
-                user=user, message_text=message_text, recent_history=recent
-            )
-        elif action == "habits":
-            response = await self.habits.process_message(
-                user=user, message_text=message_text
-            )
-        else:
-            response = data.get("response") or "סבבה! 👍"
+            response = raw
 
         await self._log(user.telegram_id, "outbound", response, "orchestrator")
         return response
@@ -153,7 +178,6 @@ class OrchestratorAgent(BaseAgent):
 
     @staticmethod
     def _strip_codeblock(text: str) -> str:
-        """Remove markdown code block wrappers (```json...```) from LLM output."""
         t = text.strip()
         if t.startswith("```"):
             first_nl = t.index("\n") if "\n" in t else 3
@@ -173,11 +197,89 @@ class OrchestratorAgent(BaseAgent):
             {
                 "name": user.name,
                 "age": user.age,
+                "height": user.height,
                 "sport_type": user.sport_type,
+                "sport_frequency": user.sport_frequency,
                 "eating_habits": user.eating_habits,
+                "preferences": user.preferences,
+                "triggers": user.triggers,
             },
             ensure_ascii=False,
         )
+
+    @staticmethod
+    def _build_history(recent_interactions: list) -> list[dict]:
+        """Convert recent interactions to Claude messages format (oldest first)."""
+        messages = []
+        for inter in reversed(recent_interactions):
+            role = "user" if inter.direction == "inbound" else "assistant"
+            text = inter.message_text
+            if not text:
+                continue
+            # Avoid consecutive messages with same role (Claude requirement)
+            if messages and messages[-1]["role"] == role:
+                messages[-1]["content"] += f"\n{text}"
+            else:
+                messages.append({"role": role, "content": text})
+        return messages
+
+    @staticmethod
+    async def _get_today_stats(telegram_id: int) -> str:
+        today_str = datetime.utcnow().date().isoformat()
+        score = await score_repo.get(telegram_id, today_str)
+        today_meals = await meal_repo.get_today(telegram_id)
+        streak = await score_repo.calculate_streak(telegram_id)
+
+        meal_descriptions = [
+            f"- {m.description or 'ארוחה'} ({m.rating or '?'})"
+            for m in today_meals
+        ]
+
+        return json.dumps(
+            {
+                "health_score": score.health_score if score else 0,
+                "meals_count": len(today_meals),
+                "meals_today": meal_descriptions or ["אין ארוחות עדיין"],
+                "water_intake": score.water_intake if score else 0,
+                "junk_count": score.junk_count if score else 0,
+                "streak_days": streak,
+                "current_hour": datetime.utcnow().strftime("%H:%M"),
+            },
+            ensure_ascii=False,
+        )
+
+    @staticmethod
+    async def _update_water(telegram_id: int, glasses: int) -> None:
+        from database.models import DailyScoreModel
+        today_str = datetime.utcnow().date().isoformat()
+        existing = await score_repo.get(telegram_id, today_str)
+        if existing:
+            existing.water_intake = max(existing.water_intake, glasses)
+            await score_repo.upsert(existing)
+        else:
+            await score_repo.upsert(DailyScoreModel(
+                telegram_id=telegram_id,
+                date=today_str,
+                water_intake=glasses,
+            ))
+
+    @staticmethod
+    async def _save_text_meal(user: UserModel, meal_data: dict) -> None:
+        from database.models import MealModel
+        import uuid
+        try:
+            meal = MealModel(
+                id=str(uuid.uuid4()),
+                telegram_id=user.telegram_id,
+                timestamp=datetime.utcnow(),
+                description=meal_data.get("description"),
+                categories=meal_data.get("categories"),
+                rating=meal_data.get("rating"),
+                feedback_text=None,
+            )
+            await meal_repo.create(meal)
+        except Exception as exc:
+            logger.error("Failed to save text meal: %s", exc, exc_info=True)
 
     @staticmethod
     async def _log(
