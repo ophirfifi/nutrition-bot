@@ -10,13 +10,15 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from telegram import Update
 
+from auth import require_admin_token
 from bot.app import create_application
 from config import settings
 from database.connection import init_firebase
+from database.repositories import admin as admin_repo
 from database.repositories import meals as meal_repo
 from database.repositories import scores as score_repo
 from database.repositories import users as user_repo
@@ -147,3 +149,33 @@ async def get_meals(telegram_id: int, limit: int = 10):
         }
         for m in recent
     ]
+
+
+# ── Admin API ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/admin/overview", dependencies=[Depends(require_admin_token)])
+async def admin_overview():
+    return await admin_repo.overview()
+
+
+@app.get("/api/admin/users", dependencies=[Depends(require_admin_token)])
+async def admin_users(limit: int = 50, offset: int = 0):
+    return await admin_repo.list_users(limit=limit, offset=offset)
+
+
+@app.get("/api/admin/users/{telegram_id}", dependencies=[Depends(require_admin_token)])
+async def admin_user_detail(telegram_id: int):
+    detail = await admin_repo.user_detail(telegram_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="User not found")
+    return detail
+
+
+@app.get("/api/admin/interactions", dependencies=[Depends(require_admin_token)])
+async def admin_interactions(limit: int = 50):
+    return await admin_repo.recent_interactions(limit=limit)
+
+
+@app.get("/api/admin/distress", dependencies=[Depends(require_admin_token)])
+async def admin_distress(limit: int = 50):
+    return await admin_repo.recent_interactions(limit=limit, distress_only=True)

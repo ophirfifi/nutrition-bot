@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # Hosting
     webhook_base_url: str  # https://your-domain.railway.app (no trailing slash)
 
+    # Admin
+    admin_secret_token: str = ""  # shared secret for /api/admin/* endpoints
+
     # App
     debug: bool = False
     skip_telegram: bool = False  # set True locally when Telegram API is unreachable

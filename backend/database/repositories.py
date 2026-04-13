@@ -185,8 +185,169 @@ class InteractionRepository:
         return results
 
 
+# ── Admin (cross-user queries) ───────────────────────────────────────────────
+
+class AdminRepository:
+
+    async def overview(self) -> dict:
+        db = get_db()
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Total users
+        total_users = 0
+        async for _ in db.collection("users").stream():
+            total_users += 1
+
+        # Active today (users updated today)
+        active_today = 0
+        async for doc in db.collection("users").where("updated_at", ">=", today_start).stream():
+            active_today += 1
+
+        # Meals today (collection group query)
+        meals_today = 0
+        async for _ in db.collection_group("meals").where("timestamp", ">=", today_start).stream():
+            meals_today += 1
+
+        # Distress today (collection group query)
+        distress_today = 0
+        async for _ in (
+            db.collection_group("interactions")
+            .where("distress_flag", "==", True)
+            .where("timestamp", ">=", today_start)
+            .stream()
+        ):
+            distress_today += 1
+
+        return {
+            "total_users": total_users,
+            "active_today": active_today,
+            "meals_today": meals_today,
+            "distress_today": distress_today,
+        }
+
+    async def list_users(self, limit: int = 50, offset: int = 0) -> list[dict]:
+        db = get_db()
+        query = db.collection("users").order_by("updated_at", direction="DESCENDING")
+        results = []
+        idx = 0
+        async for doc in query.stream():
+            if idx < offset:
+                idx += 1
+                continue
+            if len(results) >= limit:
+                break
+            data = doc.to_dict()
+            # Get today's score
+            today_str = datetime.utcnow().date().isoformat()
+            score_doc = await (
+                db.collection("users")
+                .document(doc.id)
+                .collection("daily_scores")
+                .document(today_str)
+                .get()
+            )
+            health_score = score_doc.to_dict().get("health_score", 0) if score_doc.exists else 0
+
+            results.append({
+                "telegram_id": int(doc.id),
+                "name": data.get("name"),
+                "age": data.get("age"),
+                "sport_type": data.get("sport_type"),
+                "onboarding_complete": data.get("onboarding_complete", False),
+                "health_score": health_score,
+                "updated_at": data.get("updated_at").isoformat() if data.get("updated_at") else None,
+                "created_at": data.get("created_at").isoformat() if data.get("created_at") else None,
+            })
+            idx += 1
+        return results
+
+    async def user_detail(self, telegram_id: int) -> dict | None:
+        db = get_db()
+        user_doc = await db.collection("users").document(str(telegram_id)).get()
+        if not user_doc.exists:
+            return None
+        user_data = user_doc.to_dict()
+
+        # Recent meals
+        meal_docs = (
+            db.collection("users").document(str(telegram_id))
+            .collection("meals")
+            .order_by("timestamp", direction="DESCENDING")
+            .limit(20)
+        )
+        meals_list = []
+        async for doc in meal_docs.stream():
+            m = doc.to_dict()
+            m["id"] = doc.id
+            meals_list.append(m)
+
+        # Score history (last 30 days)
+        cutoff = (datetime.utcnow() - timedelta(days=30)).date().isoformat()
+        score_docs = (
+            db.collection("users").document(str(telegram_id))
+            .collection("daily_scores")
+            .where("date", ">=", cutoff)
+            .order_by("date", direction="ASCENDING")
+        )
+        scores_list = []
+        async for doc in score_docs.stream():
+            scores_list.append(doc.to_dict())
+
+        # Recent interactions
+        int_docs = (
+            db.collection("users").document(str(telegram_id))
+            .collection("interactions")
+            .order_by("timestamp", direction="DESCENDING")
+            .limit(50)
+        )
+        interactions_list = []
+        async for doc in int_docs.stream():
+            interactions_list.append(doc.to_dict())
+
+        return {
+            "user": {
+                "telegram_id": telegram_id,
+                "name": user_data.get("name"),
+                "age": user_data.get("age"),
+                "height": user_data.get("height"),
+                "sport_type": user_data.get("sport_type"),
+                "sport_frequency": user_data.get("sport_frequency"),
+                "eating_habits": user_data.get("eating_habits"),
+                "preferences": user_data.get("preferences"),
+                "triggers": user_data.get("triggers"),
+                "onboarding_complete": user_data.get("onboarding_complete", False),
+                "created_at": user_data.get("created_at").isoformat() if user_data.get("created_at") else None,
+            },
+            "meals": meals_list,
+            "scores": scores_list,
+            "interactions": interactions_list,
+        }
+
+    async def recent_interactions(self, limit: int = 50, distress_only: bool = False) -> list[dict]:
+        db = get_db()
+        query = db.collection_group("interactions")
+        if distress_only:
+            query = query.where("distress_flag", "==", True)
+        query = query.order_by("timestamp", direction="DESCENDING").limit(limit)
+
+        # Build a name cache to avoid repeated lookups
+        name_cache: dict[str, str | None] = {}
+        results = []
+        async for doc in query.stream():
+            data = doc.to_dict()
+            tid = doc.reference.parent.parent.id
+            if tid not in name_cache:
+                user_doc = await db.collection("users").document(tid).get()
+                name_cache[tid] = user_doc.to_dict().get("name") if user_doc.exists else None
+            data["telegram_id"] = int(tid)
+            data["user_name"] = name_cache[tid]
+            results.append(data)
+        return results
+
+
 # ── Singletons ────────────────────────────────────────────────────────────────
 users = UserRepository()
 meals = MealRepository()
 scores = DailyScoreRepository()
 interactions = InteractionRepository()
+admin = AdminRepository()
