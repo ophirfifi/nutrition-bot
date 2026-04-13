@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.0] — 2026-04-13 — Railway Deployment & Production Setup
+
+### Added
+- Railway deployment for backend (FastAPI) and dashboard (Next.js)
+- SKIP_TELEGRAM flag for local dev when corporate VPN blocks Telegram API
+- Firebase credentials base64 encoding for production (FIREBASE_CREDENTIALS_BASE64)
+- Next.js standalone output mode for containerized deploys
+- Railway healthcheck configuration for both services
+
+### Fixed
+- Next.js standalone server binding to 0.0.0.0 (was localhost, blocked Railway healthcheck)
+- Upgraded next from 14.2.18 to ^14.2.35 (CVE-2025-55184, CVE-2025-67779)
+- Forced NIXPACKS builder (Railway default RAILPACK was inconsistent)
+
+### Infrastructure
+- Backend: https://backend-production-1185.up.railway.app
+- Dashboard: https://dashboard-production-09c0.up.railway.app
+- GitHub repo: ophirfifi/nutrition-bot (master branch, auto-deploy)
+- Environment variables configured via Railway API
+
 ## [0.1.0] — 2026-04-12 — Initial MVP Build
 
 ### Added
