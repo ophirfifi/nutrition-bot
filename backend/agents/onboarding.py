@@ -98,7 +98,7 @@ class OnboardingAgent(BaseAgent):
 
         # Check if Claude returned a completion JSON
         try:
-            data = json.loads(response_text.strip())
+            data = json.loads(self._strip_codeblock(response_text))
             if data.get("complete") is True:
                 await self._save_profile(user.telegram_id, data["data"])
                 sport = data["data"].get("sport_type", "ספורט")
@@ -124,6 +124,16 @@ class OnboardingAgent(BaseAgent):
         }
         await user_repo.complete_onboarding(telegram_id, profile_fields)
         logger.info("Onboarding complete for user %s", telegram_id)
+
+    @staticmethod
+    def _strip_codeblock(text: str) -> str:
+        t = text.strip()
+        if t.startswith("```"):
+            first_nl = t.index("\n") if "\n" in t else 3
+            t = t[first_nl + 1:]
+        if t.endswith("```"):
+            t = t[:-3]
+        return t.strip()
 
     async def get_welcome_message(self) -> str:
         return (

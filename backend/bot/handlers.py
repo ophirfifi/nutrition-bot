@@ -48,7 +48,20 @@ async def _get_or_create_user(telegram_id: int) -> tuple[UserModel, bool]:
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user, created = await _get_or_create_user(update.effective_user.id)
+
+    # Reset onboarding so /start always restarts the flow
+    if not created and user.onboarding_complete:
+        await user_repo.update(
+            user.telegram_id,
+            onboarding_complete=False,
+            onboarding_messages=[],
+        )
+
     welcome = await onboarding_agent.get_welcome_message()
+    # Save welcome as assistant message so Claude has context
+    await user_repo.save_onboarding_message(
+        update.effective_user.id, "assistant", welcome
+    )
     await update.message.reply_text(welcome)
 
 

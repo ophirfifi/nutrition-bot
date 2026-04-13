@@ -121,7 +121,7 @@ class OrchestratorAgent(BaseAgent):
         )
 
         try:
-            data = json.loads(raw.strip())
+            data = json.loads(self._strip_codeblock(raw))
             action = data.get("action", "direct")
         except (json.JSONDecodeError, KeyError):
             logger.warning("Orchestrator returned non-JSON: %.200s", raw)
@@ -150,6 +150,17 @@ class OrchestratorAgent(BaseAgent):
         return response
 
     # ── Helpers ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _strip_codeblock(text: str) -> str:
+        """Remove markdown code block wrappers (```json...```) from LLM output."""
+        t = text.strip()
+        if t.startswith("```"):
+            first_nl = t.index("\n") if "\n" in t else 3
+            t = t[first_nl + 1:]
+        if t.endswith("```"):
+            t = t[:-3]
+        return t.strip()
 
     @staticmethod
     def _is_distress(text: str) -> bool:

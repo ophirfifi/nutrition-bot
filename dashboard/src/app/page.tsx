@@ -124,7 +124,7 @@ function NoId() {
       <span className="text-5xl">🤖</span>
       <h1 className="text-2xl font-black text-white">נוטרי</h1>
       <p className="text-muted">כדי לראות את הדשבורד שלך,</p>
-      <p className="text-muted">פנה ל-<strong className="text-white">@NutriBot</strong> בטלגרם</p>
+      <p className="text-muted">פנה ל-<strong className="text-white">@Foody</strong> בטלגרם</p>
       <p className="text-xs text-muted/60 mt-4">הבוט ישלח לך לינק אישי לדשבורד</p>
     </div>
   )
