@@ -8,14 +8,12 @@ Flow per message:
 import base64
 import logging
 
-import httpx
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from agents.onboarding import OnboardingAgent
 from agents.orchestrator import OrchestratorAgent
-from config import settings
 from database.models import UserModel
 from database.repositories import users as user_repo
 
@@ -118,14 +116,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     # Download the highest-quality photo from Telegram
     photo = update.message.photo[-1]
-    tg_file = await context.bot.get_file(photo.file_id)
-    photo_url = f"https://api.telegram.org/file/bot{settings.telegram_bot_token}/{tg_file.file_path}"
-
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(photo_url)
-            resp.raise_for_status()
-            photo_bytes = resp.content
+        tg_file = await context.bot.get_file(photo.file_id)
+        photo_bytes = bytes(await tg_file.download_as_bytearray())
     except Exception as exc:
         logger.error("Failed to download photo for user %s: %s", user.telegram_id, exc, exc_info=True)
         await update.message.reply_text(
